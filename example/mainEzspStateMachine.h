@@ -8,6 +8,7 @@
 #include <string>
 #include <iostream>
 #include <iomanip>
+#include <thread>
 #include <map>
 #include <cmath>	// For abs()
 
@@ -16,6 +17,11 @@
 
 #include <ezsp/ezsp.h>
 #include <ezsp/byte-manip.h>
+#include <ezsp/zbmessage/cluster-attribute.h>
+#include <ezsp/zbmessage/zdp-enum.h>
+#include <device.h>
+#include <endpoint.h>
+#include <synchroneThread.h>
 
 namespace NSMAIN {
 
@@ -282,38 +288,32 @@ public:
 
 				this->scanChannelsThenRun();
 			}
-			// else if (this->openZigbeeCommissionningAtStartup) {
-			//     // If requested to do so, open the zigbee network for a specific duration, so new devices can join
-			//     zb_nwk.openNetwork(60);
+			else if (this->openZigbeeCommissionningAtStartup) {
+				libEzsp.openNetwork(60);
 
-			//     // we retrieve network information and key and eui64 of dongle (can be done before)
-			//     dongle.sendCommand(EZSP_GET_NETWORK_PARAMETERS);
-			//     dongle.sendCommand(EZSP_GET_EUI64);
-			//     dongle.sendCommand(EZSP_GET_KEY, { EMBER_CURRENT_NETWORK_KEY });
+				//start discover of existing product inside network
+				/*libEzsp.startDiscoverProduct([&](EmberNodeType i_type, EmberEUI64 i_eui64, EmberNodeId i_id){
+					clogI << " Is it a new product ";
+					//clogI << "[type : "<< CEzspEnum::EmberNodeTypeToString(i_type) << "]";
+					clogI << "[eui64 :";
+					for(uint8_t loop=0; loop<i_eui64.size(); loop++){ clogI << " " << std::hex << std::setw(2) << std::setfill('0') << unsigned(i_eui64[loop]); }
+					clogI << "]";
+					clogI << "[id : "<< std::hex << std::setw(4) << std::setfill('0') << unsigned(i_id) << "]";
+					clogI << " ?" << std::endl;
 
-			//     // start discover of existing product inside network
-			//     zb_nwk.startDiscoverProduct([&](EmberNodeType i_type, EmberEUI64 i_eui64, EmberNodeId i_id){
-			//         clogI << " Is it a new product ";
-			//         clogI << "[type : "<< CEzspEnum::EmberNodeTypeToString(i_type) << "]";
-			//         clogI << "[eui64 :";
-			//         for(uint8_t loop=0; loop<i_eui64.size(); loop++){ clogI << " " << std::hex << std::setw(2) << std::setfill('0') << unsigned(i_eui64[loop]); }
-			//         clogI << "]";
-			//         clogI << "[id : "<< std::hex << std::setw(4) << std::setfill('0') << unsigned(i_id) << "]";
-			//         clogI << " ?" << std::endl;
+					if( libEzsp.addProduct( i_eui64, i_id ) )
+					{
+						clogI << "YES !! Retrieve information for binding" << std::endl;
 
-			//         if( db.addProduct( i_eui64, i_id ) )
-			//         {
-			//             clogI << "YES !! Retrieve information for binding" << std::endl;
+						// retrieve information about device, starting by discover list of active endpoint
+						NSSPI::ByteBuffer payload;
+						payload.push_back(u16_get_lo_u8(i_id));
+						payload.push_back(u16_get_hi_u8(i_id));
 
-			//             // retrieve information about device, starting by discover list of active endpoint
-			//             NSSPI::ByteBuffer payload;
-			//             payload.push_back(u16_get_lo_u8(i_id));
-			//             payload.push_back(u16_get_hi_u8(i_id));
-
-			//             zb_messaging.SendZDOCommand( i_id, ZDP_ACTIVE_EP, payload );
-			//         }
-			//     });
-			// }
+						libEzsp.SendZDOCommand( i_id, 0x05, payload );
+					}
+				});*/
+			}
 			else {
 				clogW << "Ignoring EZSP library state change\n";
 			}
@@ -514,7 +514,260 @@ public:
 		}
 	}
 
+	void handleElectricalMesurementAttribute(const uint16_t id, const int data){
+		for(std::map<int32_t, std::string>::iterator it = NSEZSP::ELECTRICAL_MESUREMENT_ATTRIBUTE.begin(); it != NSEZSP::ELECTRICAL_MESUREMENT_ATTRIBUTE.end(); ++it) {
+			if(id == it->first){
+				clogI << NSEZSP::ELECTRICAL_MESUREMENT_ATTRIBUTE[id] << data << "\n";
+			}
+		}
+	}
+
+	/**
+	 * @brief Handler to be invoked when EZSP_GET_EUI64 is received.
+	 * 		  You can use libEzsp.getEUI64() to retrieve EUI64 of dongle here.
+	 *
+	 * It will take the appropriate actions
+	 *
+	 * @param[in] dongleEUI64 EUI64 of dongle
+	 */
+	void onReceivedDongleEUI64(std::vector<uint8_t> &dongleEUI64){
+		clogI << "EZSP_GET_EUI64 receive : ";
+		for(uint8_t i = 0; i<dongleEUI64.size(); i++){
+			clogI << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned int>(dongleEUI64[i])<< " ";
+		}
+
+		clogI << std::endl;
+	}
+
+	/**
+	 * @brief Handler to be invoked when a new device join the network
+	 *
+	 * It will take the appropriate actions
+	 *
+	 * @param[in] sender Node id of the new device
+	 * @param[in] deviceEui64 EUI64 of the new device
+	 */
+	void onReceivedZdpDeviceAnnounce(NSEZSP::EmberNodeId &sender, NSEZSP::EmberEUI64 &deviceEui64){
+		clogI << "New device join network, his node id is : " << sender << " and his EUI64 is : ";
+		for (auto it = deviceEui64.begin(); it != deviceEui64.end(); it++)
+			clogI << std::hex << static_cast<unsigned int>(*it) << " ";
+		clogI << std::endl;
+
+		// Create a new device and add it to the devices vector
+		NSMAIN::CDevice device(sender);
+		device.setAddressEUI64(deviceEui64);
+		this->devices.push_back(device);
+
+		NSSPI::ByteBuffer payload;
+		payload.push_back(NSEZSP::u16_get_lo_u8(sender));
+		payload.push_back(NSEZSP::u16_get_hi_u8(sender));
+		libEzsp.SendZDOCommand( sender, NSEZSP::ZDP_ACTIVE_EP , payload );
+	}
+
+	/**
+	 * @brief Handler to be invoked when a ZDP_ACTIVE_ENDPOINT is received
+	 *
+	 * It will take the appropriate actions
+	 *
+	 * @param[in] status status
+	 * @param[in] address Node id
+	 * @param[in] ep_count endpoint counter
+	 * @param[in] ep_list list of active endpoint
+	 */
+	void onReceivedZdpActiveEp(uint8_t status, NSEZSP::EmberNodeId &address, uint8_t ep_count, std::vector<uint8_t> &ep_list){
+		clogI << "ZDP_ACTIVE_ENDPOINT from : " << address << " with status : " << static_cast<bool>(status)
+		<< " { [ep_count : " << std::hex << static_cast<unsigned int>(ep_count) << "][ep_list : ";
+
+		for(uint8_t i = 0; i<ep_list.size(); i++){
+			clogI << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned int>(ep_list[i])<< " ";
+		}
+
+		clogI << "] }" << std::endl;
+
+		// Creation of a thread to perform the ZDP_SIMPLE_DESC command in parallel on each endpoint
+		threadPtr = new SynchroneThread(libEzsp, address, ep_list);
+    	std::thread* t = new std::thread(std::ref(*threadPtr));
+
+		t->detach();
+	}
+
+	/**
+	 * @brief Handler to be invoked when a ZDP_SIMPLE_DESC is received
+	 *
+	 * It will take the appropriate actions
+	 *
+	 * @param[in] status status
+	 * @param[in] address Node id
+	 * @param[in] endpoint endpoint
+	 * @param[in] profile_id profile id
+	 * @param[in] device_id device id
+	 * @param[in] version version
+	 * @param[in] in_count in cluster count
+	 * @param[in] out_count out cluster count
+	 * @param[in] in_list list of in cluster on endpoint
+	 * @param[in] out_count list of out cluster on endpoint
+	 */
+	void onReceivedZdpSimpleDesc(uint8_t status, NSEZSP::EmberNodeId &address, uint8_t &endpoint, uint16_t &profile_id, uint16_t &device_id,
+								 uint8_t version, uint8_t in_count, uint8_t out_count, std::vector<uint16_t> &in_list,
+								 std::vector<uint16_t> &out_list){
+
+		std::stringstream buf;
+		buf << "ZDP_SIMPLE_DESC from : " << std::hex << std::setw(2) << std::setfill('0') << unsigned(address) <<
+			" [ status : " << std::hex << std::setw(2) << std::setfill('0') << unsigned(status) << "]" <<
+			"[ address : " << std::hex << std::setw(4) << std::setfill('0') << unsigned(address) << "]" <<
+			"[ endpoint : " << std::hex << std::setw(2) << std::setfill('0') << unsigned(endpoint) << "]" <<
+			"[ profile_id : " << std::hex << std::setw(4) << std::setfill('0') << unsigned(profile_id) << "]" <<
+			"[ device_id : " << std::hex << std::setw(4) << std::setfill('0') << unsigned(device_id) << "]" <<
+			"[ version : " << std::hex << std::setw(2) << std::setfill('0') << unsigned(version) << "]" <<
+			"[ in_count : " << std::hex << std::setw(2) << std::setfill('0') << unsigned(in_count) << "]" <<
+			"[ in : ";
+		for(uint8_t loop = 0; loop < in_list.size(); loop++) {
+			buf << std::hex << std::setw(4) << std::setfill('0') << unsigned(in_list.at(loop)) << " ";
+		}
+		buf << "][ out_count : " << std::hex << std::setw(2) << std::setfill('0') << unsigned(out_count) << "]" <<
+			"[ out : ";
+		for(uint8_t loop = 0; loop < out_list.size(); loop++) {
+			buf << std::hex << std::setw(4) << std::setfill('0') << unsigned(out_list.at(loop)) << " ";
+		}
+		buf << "]";
+		clogI << buf.str() << std::endl;
+
+		// Add enpoint on the right device
+		for(uint8_t loop=0; loop<this->devices.size(); loop++) {
+			if(address == this->devices[loop].getAddress()){
+				this->devices[loop].setDeviceId(device_id);
+				this->devices[loop].setProfileId(profile_id);
+				this->devices[loop].setVersion(version);
+				// Create endpoint and add it to the device
+				NSMAIN::CEndpoint endPoint(endpoint, in_list, out_list);
+				this->devices[loop].setEndpoint(endPoint);
+			}
+		}
+
+		// Debug
+		//clogI << devices[0].String() << std::endl;
+
+		// Notify the thread to continue its execution
+		this->threadPtr->event();
+	}
+
+	/**
+	 * @brief Handler to be invoked when a new ZCL frame is received
+	 *
+	 * It will take the appropriate actions
+	 *
+	 * @param[in] i_zclf The frame received
+	 * @param[in] sender Node id
+	 * @param[in] last_hop_lqi Last hop lqi receive
+	 */
+	void onReceivedZclFrame(NSEZSP::EmberNodeId &sender, NSEZSP::CZclFrame &i_zclf, uint8_t last_hop_lqi) {
+		clogI <<"Receive ZCL Frame from device 0x"<< std::hex << std::setw(4) << std::setfill('0') << unsigned(sender) << " - ";
+		clogI << i_zclf.String() << std::endl;
+
+		if( 0 == i_zclf.getType() ) {
+			// to be inprove : report attribute general command, be carrefull if they are two repport of same cluster in the frame
+			if( 0x0A == i_zclf.getCommand() ) { // GENERIC_COMMAND_REPORT_ATTRIBUTES
+				//uint8_t data_type = zbMsg.GetPayload().at(2);
+				if( 0x0402 == i_zclf.getCluster() ) {
+					uint16_t attr_id = NSEZSP::dble_u8_to_u16(i_zclf.getPayload().at(1), i_zclf.getPayload().at(0));
+					if( 0x00 == attr_id ) {
+						uint16_t value_raw = NSEZSP::dble_u8_to_u16(i_zclf.getPayload().at(4), i_zclf.getPayload().at(3));
+						clogI << ">>> Temperature : " << static_cast<float>(value_raw) / 100 << "°C\n";
+					}
+				}
+				else if( 0x0405 == i_zclf.getCluster() ) {
+					uint16_t attr_id = NSEZSP::dble_u8_to_u16(i_zclf.getPayload().at(1), i_zclf.getPayload().at(0));
+					if( 0x00 == attr_id ) {
+						uint16_t value_raw = NSEZSP::dble_u8_to_u16(i_zclf.getPayload().at(4), i_zclf.getPayload().at(3));
+						clogI << ">>> Relative Humidity : " << static_cast<float>(value_raw) / 100 << "%\n";
+					}
+				}
+				else if( 0x0b04 == i_zclf.getCluster() ) {
+					for(int i = 0; i < i_zclf.getPayload().size()-2; i++){
+						if(i_zclf.getPayload().at(i+2) == NSEZSP::ZCL_INT16U_ATTRIBUTE_TYPE || i_zclf.getPayload().at(i+2) == NSEZSP::ZCL_INT16S_ATTRIBUTE_TYPE) {
+							uint16_t data_type = i_zclf.getPayload().at(i+2);
+							uint16_t attr_id = NSEZSP::dble_u8_to_u16(i_zclf.getPayload().at(i+1), i_zclf.getPayload().at(i));
+							uint16_t data = NSEZSP::dble_u8_to_u16(i_zclf.getPayload().at(i+4), i_zclf.getPayload().at(i+3));
+							handleElectricalMesurementAttribute(attr_id, data);
+							i += 2;
+						}
+						else if(i_zclf.getPayload().at(i+2) == NSEZSP::ZCL_INT8S_ATTRIBUTE_TYPE) {
+							uint16_t data_type = i_zclf.getPayload().at(i+2);
+							uint16_t attr_id = NSEZSP::dble_u8_to_u16(i_zclf.getPayload().at(i+1), i_zclf.getPayload().at(i));
+							uint8_t data = i_zclf.getPayload().at(i+3);
+							handleElectricalMesurementAttribute(attr_id, data);
+							i += 1;
+						}
+					}
+				}
+				else if( 0x0006 == i_zclf.getCluster() ) {
+					uint16_t attr_id = NSEZSP::dble_u8_to_u16(i_zclf.getPayload().at(1), i_zclf.getPayload().at(0));
+					/* Send ZCL Command example */
+					//libEzsp.SendZCLCommand(0x01, 0x0006, 0x02, NSEZSP::E_DIR_CLIENT_TO_SERVER, NSSPI::ByteBuffer(), 0xf791);
+					/* Write Attribute example */
+					//libEzsp.WriteAttribute(0x01, 0x0006, 0x4002, NSEZSP::E_DIR_CLIENT_TO_SERVER, NSEZSP::ZCL_INT16U_ATTRIBUTE_TYPE, NSSPI::ByteBuffer({0xff, 0xff}), 0x235b);
+					/* Configure reporting example */
+					//libEzsp.ConfigureReporting(0x01, 0x0702, 0x0200, NSEZSP::E_DIR_CLIENT_TO_SERVER, NSEZSP::ZCL_BITMAP8_ATTRIBUTE_TYPE, 0x0010, 0x0030, 0x0000, sender);
+					/* Read attribute example */
+					//libEzsp.ReadAttributes(0x01, 0x0006, { 0x0000 }, NSEZSP::E_DIR_CLIENT_TO_SERVER, sender);
+
+					/* Discover attributes for a non specific manufacturer code, if cluster < 0xFC00 */
+					//libEzsp.DiscoverAttributes(0x01, 0x0006, 0x0000, 0xFF, NSEZSP::E_DIR_CLIENT_TO_SERVER, sender);
+
+					/* Discover attributes for a specific manufacturer code, if cluster >= 0xFC00 */
+					libEzsp.DiscoverAttributes(0x01, 0xFC01, 0x0000, 0xFF, NSEZSP::E_DIR_CLIENT_TO_SERVER, sender, 0, 0, 0x1021 /* Legrand manufacturer code */);
+
+					if( 0x0000 == attr_id ) {
+						uint16_t value_raw = i_zclf.getPayload().at(3);
+						clogI << "State of led is on : " << static_cast<bool>(value_raw) << "\n";
+					}
+				}
+			}
+			else if( 0x01 == i_zclf.getCommand() ) { // GENERIC_COMMAND_READ_ATTRIBUTES_RESPONSE
+				if( 0x0000 == i_zclf.getPayload().at(2) ) {
+					clogI << "Read attribute SUCCESS\n";
+
+					clogI << "Value : " ;
+					for(uint8_t loop = 4; loop<i_zclf.getPayload().size(); loop++){
+						clogI << unsigned(i_zclf.getPayload().at(loop)); 
+					}
+
+					clogI << std::endl;
+				}
+			}
+			else if( 0x04 == i_zclf.getCommand() ) { // GENERIC_COMMAND_WRITE_ATTRIBUTES_RESPONSE
+				if( 0x0000 == i_zclf.getPayload().at(0) ) {
+					clogI << "Write attribute SUCCESS\n";
+				}
+			}
+			else if( 0x07 == i_zclf.getCommand() ) { // GENERIC_COMMAND_CONFIGURE_ATTRIBUTES_RESPONSE
+				if( 0x0000 == i_zclf.getPayload().at(0) ) {
+					clogI << "Configure attribute SUCCESS\n";
+				}else{
+					clogI << "Configure attribute FAILED\n";
+				}
+			}
+			else if( 0x0d == i_zclf.getCommand() ) { // GENERIC_COMMAND_DISCOVER_ATTRIBUTES_RESPONSE
+				if( 0x0001 == i_zclf.getPayload().at(0) ) {
+					clogI << "There are no more attributes to be discovered.\n";
+				}else{
+					clogI << "There are more attributes to be discovered that have an attribute identifier value greater than the last attribute\n";
+				}
+
+				for(uint8_t loop = 1; loop<i_zclf.getPayload().size(); loop++){
+					clogI << "Attribute ID : " << unsigned(NSEZSP::dble_u8_to_u16(i_zclf.getPayload().at(loop+1), i_zclf.getPayload().at(loop))) << std::endl;
+					clogI << "Data type : " << unsigned(i_zclf.getPayload().at(loop + 2)) << std::endl;
+					loop += 2;
+				}
+				//clogI << i_zclf.String();
+			}
+		}
+	}
+
 private:
+	std::vector<NSMAIN::CDevice> devices; /* All the the new devices joining the network are store in this vector,
+											 so you need to store all these devices in database or something else */
+
 	unsigned int initFailures;  /*!< How many failed init cycles we have done so far */
 	NSSPI::TimerBuilder &timerBuilder;    /*!< A builder to create timer instances */
 	NSEZSP::CEzsp& libEzsp;  /*!< The CEzsp instance to use to communicate with the EZSP adapter */
@@ -528,6 +781,7 @@ private:
 	std::unique_ptr<NSSPI::ITimer> channelRequestAnswerTimer;   /*!< A timer to temporarily allow channel request */
 	MainState currentState; /*!< Our current state (for the internal state machine) */
 	bool startFirmwareUpgrade; /*!< Do we immediately put the EZSP adapter into firmware upgrade mode at startup */
+	SynchroneThread* threadPtr = nullptr;
 };
 
 } // namespace NSMAIN

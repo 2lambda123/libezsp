@@ -346,6 +346,9 @@ void CGpSink::handleEzspRxMessage_INCOMING_MESSAGE_HANDLER(const NSSPI::ByteBuff
 	}
 #endif
 	notifyObserversOfRxGpdId(gpf.getSourceId(), (gpf.getProxyTableEntry()!=0xFF?true:false), l_key_status);
+	if(gpf.getCommandId() == 0xE0){
+		notifyObserversForCommissioningGpDevice(gpf);
+	}
 
 	clogD << "handleEzspRxMessage_INCOMING_MESSAGE_HANDLER(): "
 #ifndef USE_BUILTIN_MIC_PROCESSING
@@ -710,6 +713,12 @@ void CGpSink::notifyObserversOfRxGpdId( uint32_t i_gpd_id, bool i_gpd_known, CGp
 	}
 }
 
+void CGpSink::notifyObserversForCommissioningGpDevice( CGpFrame i_gpf ) {
+	for(auto observer : this->observers) {
+		observer->handleRxGpFrameCommissioning( i_gpf );
+	}
+}
+
 void CGpSink::sendLocalGPProxyCommissioningMode(uint8_t i_option) {
 	// forge GP Proxy Commissioning Mode command
 	// assume we are coordinator of network and our nodeId is 0
@@ -735,7 +744,7 @@ void CGpSink::sendLocalGPProxyCommissioningMode(uint8_t i_option) {
 	// create message sending from ep242 to ep242 using green power profile
 	l_gp_comm_msg.SetSpecific(GP_PROFILE_ID, PUBLIC_CODE, GP_ENDPOINT,
 	                          GP_CLUSTER_ID, GP_PROXY_COMMISIONING_MODE_CLIENT_CMD_ID,
-	                          E_DIR_SERVER_TO_CLIENT, l_gp_comm_payload, 0, 0, 0);
+	                          E_DIR_SERVER_TO_CLIENT, l_gp_comm_payload, 0, 0);
 
 	// WARNING use ep 242 as sources
 	l_gp_comm_msg.aps.src_ep = GP_ENDPOINT;
@@ -904,9 +913,10 @@ void CGpSink::gpSinkSetEntry( uint8_t i_index, CEmberGpSinkTableEntryStruct& i_e
 }
 
 
-void CGpSink::gpProxyTableProcessGpPairing( CProcessGpPairingParam& i_param ) {
+void CGpSink::gpProxyTableProcessGpPairing(const CProcessGpPairingParam& i_param) {
 	clogD << "EZSP_GP_PROXY_TABLE_PROCESS_GP_PAIRING\n";
-	dongle.sendCommand(EZSP_GP_PROXY_TABLE_PROCESS_GP_PAIRING,i_param.get());
+	//clogD << "Sending EZSP_GP_PROXY_TABLE_PROCESS_GP_PAIRING with payload " << i_param << "\n";
+	dongle.sendCommand(EZSP_GP_PROXY_TABLE_PROCESS_GP_PAIRING, i_param.get());
 }
 
 void CGpSink::gpSend(bool i_action, bool i_use_cca, CEmberGpAddressStruct i_gp_addr,

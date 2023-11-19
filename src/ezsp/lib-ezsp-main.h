@@ -15,6 +15,7 @@
 #include "ezsp/enum-generator.h"
 #include "ezsp/ezsp-dongle.h"
 #include "ezsp/zigbee-tools/zigbee-networking.h"
+#include "ezsp/zbmessage/zdp-enum.h"
 #include "ezsp/zigbee-tools/zigbee-messaging.h"
 #include "ezsp/zigbee-tools/green-power-sink.h"
 #include "ezsp/zbmessage/green-power-device.h"
@@ -23,7 +24,6 @@
 
 #include "ezsp/ezsp-dongle-observer.h"
 #include "ezsp/green-power-observer.h"
-
 
 namespace NSEZSP {
 
@@ -138,6 +138,62 @@ public:
 	void registerLibraryStateCallback(FLibStateCallback newObsStateCallback);
 
 	/**
+	 * @brief Register callback to receive all zcl incoming frames
+	 *
+	 * @param newObsZclFrameRecvCallback A callback function that will be invoked each time a new zcl frame is received from a known source ID
+	 */
+	void registerZclFrameRecvCallback(FZclFrameRecvCallback newObsZclFrameRecvCallback);
+
+	/**	
+	 * @brief Register callback to receive the bindings table on specific node id
+	 *
+	 * @param newObsBindingTableRecvCallback A callback function that will be invoked each time a new bindings table is received from a known source ID
+	 */
+	void registerBindingTableRecvCallback(FBindingTableRecvCallback newObsBindingTableRecvCallback);
+
+	/**
+	 * @brief Register callback to receive join/leave network
+	 *
+	 * @param newObsTrustCenterJoinHandlerCallback A callback function that will be invoked each time a EZSP_TRUST_CENTER_JOIN_HANDLER is received
+	 */
+	void registerTrustCenterJoinHandlerCallback(FTrustCenterJoinHandlerCallBack newObsTrustCenterJoinHandlerCallback);
+
+	/**
+	 * @brief Register callback to receive new node id in network
+	 *
+	 * @param newObsZdpDeviceAnnounceRecvCallback A callback function that will be invoked each time a new device join the network
+	 */
+	void registerZdpDeviceAnnounceRecvCallback(FZdpDeviceAnnounceCallBack newObsZdpDeviceAnnounceRecvCallback);
+
+	/**
+	 * @brief Register callback to receive a gp proxy table entry
+	 *
+	 * @param newObsGpProxyTableEntryJoinHandlerCallback A callback function that will be invoked each time a EZSP_GP_PROXY_TABLE_GET_ENTRY is received
+	 */
+	void registerGpProxyTableEntryJoinHandlerCallback(FGpProxyTableEntryHandlerCallBack newObsGpProxyTableEntryJoinHandlerCallback);
+
+	/**
+	 * @brief Register callback to receive simple descriptor on specific endpoint
+	 *
+	 * @param newObsZdpSimpleDescRecvCallback A callback function that will be invoked each time a ZDP_SIMPLE_DESC is received
+	 */
+	void registerZdpSimpleDescRecvCallback(FZdpSimpleDescCallBack newObsZdpSimpleDescRecvCallback);
+
+	/**
+	 * @brief Register callback to get EUI64 dongle
+	 *
+	 * @param newObsDongleEUI64RecvCallback A callback function that will be invoked each time a EZSP_GET_EUI64 is received
+	 */
+	void registerDongleEUI64RecvCallback(FDongleEUI64CallBack newObsDongleEUI64RecvCallback);
+
+	/**
+	 * @brief Register callback to receive active endpoint on specific node id
+	 *
+	 * @param newObsZdpActiveEpRecvCallback A callback function that will be invoked each time a ZDP_ACTIVE_ENDPOINT is received
+	 */
+	void registerZdpActiveEpRecvCallback(FZdpActiveEpCallBack newObsZdpActiveEpRecvCallback);
+
+	/**
 	 * @brief Register callback to receive all authenticated incoming green power frames
 	 *
 	 * @param newObsGPFrameRecvCallback A callback function of type void func(CGpFrame &i_gpf), that will be invoked each time a new valid green power frame is received from a known source ID (or nullptr to disable this callback)
@@ -145,11 +201,39 @@ public:
 	void registerGPFrameRecvCallback(FGpFrameRecvCallback newObsGPFrameRecvCallback);
 
 	/**
+	 * @brief Register callback to receive all commissioning greenpower frame
+	 *
+	 * @param newObsGPFrameRecvCallback A callback function of type void func(CGpFrame &i_gpf), that will be invoked each time a new valid green power commissioning frame is received
+	 */
+	void registerGPFrameCommissioningRecvCallback(FGpFrameCommissioningRecvCallback newObsGPFrameCommissioningRecvCallback);
+
+	/**
 	 * @brief Register callback to receive all incoming green power sourceId
 	 *
 	 * @param newObsGPSourceIdCallback A callback function that will be invoked each time a new source ID transmits over the air (or nullptr to disable this callback)
 	 */
 	void registerGPSourceIdCallback(FGpSourceIdCallback newObsGPSourceIdCallback);
+
+	/**
+	 * @brief Register callback to receive the network parameters
+	 *
+	 * @param nwNetworkParametersCallback A callback function that will be invoked each time a EZSP_GET_NETWORK_PARAMETERS is received
+	 */
+	void registerNetworkParametersCallback(FNetworkParametersCallback newObsNetworkParametersCallback);
+
+	/**
+	 * @brief Get EUI64 dongle
+	 *
+	 * @return true if the action is going to be run in the background, false if the sink is busy
+	 */
+	bool getEUI64();
+
+	/**
+	 * @brief Get GP proxy table entry
+	 *
+	 * @return true if the action is going to be run in the background, false if the sink is busy
+	 */
+	bool getGPProxyTableEntry(const int index);
 
 	/**
 	 * @brief Remove GP all devices from sink
@@ -290,6 +374,130 @@ public:
 	 */
 	bool joinNetwork(NSEZSP::CEmberNetworkParameters& nwkParams);
 
+	/**
+	 * @brief Create a zigbee network
+	 *
+	 * @param channel The 802.15.4 channel (valid values are 11 to 26, inclusive)
+	 *
+	 * @return true If the join action could be started
+	 */
+	bool createNetwork(uint8_t channel);
+
+	/**
+	 * @brief Open the zigbee network for a defined period so other products can join the zigbee network
+	 *
+	 * @param i_timeout The time during the network is open
+	 *
+	 * @return true If the join action could be started
+	 */
+	bool openNetwork(uint8_t i_timeout);
+
+	/**
+	 * @brief Close the zigbee network
+	 */
+	bool closeNetwork();
+
+	/**
+	 * @brief Send a ZDO unicast command
+	 *
+	 * @param i_node_id Short address of destination
+	 * @param i_cmd_id Command
+	 * @param[in] payload Payload for the ZDO unicast
+	 *
+	 * @return true if message can be send
+	 */
+	bool SendZDOCommand(EmberNodeId i_node_id, uint16_t i_cmd_id, const NSSPI::ByteBuffer& payload);
+
+	/**
+	 * @brief Send a ZCL unicast command
+	 *
+	 * @param i_node_id Short address of destination
+	 * @param i_endpoint Destination endpoint
+	 * @param i_cluster_id Concerned cluster
+	 * @param i_cmd_id Command ID
+	 * @param i_direction Message direction (client to sorver or server to client)
+	 * @param i_payload Payload of the command
+	 * @param i_grp_id Multicast group address to use (0 is assume as unicast/broadcast)
+	 * @param i_manufacturer_code Manufacturer code
+	 *
+	 * @return true if message can be send
+	 */
+	bool SendZCLCommand(const uint8_t i_endpoint, const uint16_t i_cluster_id, const uint8_t i_cmd_id,
+						const NSEZSP::EZCLFrameCtrlDirection i_direction, const NSSPI::ByteBuffer& i_payload,
+						const uint16_t i_node_id, const uint8_t i_transaction_number = 0,
+						const uint16_t i_grp_id = 0, const uint16_t i_manufacturer_code = 0xFFFF);
+
+	/**
+	 * @brief Send a Discover Attributes command
+	 *
+	 * @param i_endpoint Destination endpoint
+	 * @param i_cluster_id Concerned cluster
+	 * @param i_start_attribute_identifier Specifies the value of the identifier at which to begin the attribute discovery.
+	 * @param i_maximum_attribute_identifier specifies the maximum number of attribute identifiers that are to be returned in the resulting Discover Attributes Response command.
+	 * @param i_direction Message direction (client to server or server to client)
+	 * @param i_node_id Short address of destination
+	 * @param i_grp_id Multicast group address to use (0 is assume as unicast/broadcast)
+	 * @param i_manufacturer_code Manufacturer code
+	 */
+	bool DiscoverAttributes(const uint8_t i_endpoint, const uint16_t i_cluster_id, const uint16_t i_start_attribute_identifier,
+						   const uint8_t i_maximum_attribute_identifier, const EZCLFrameCtrlDirection i_direction, const uint16_t i_node_id,
+						   const uint8_t i_transaction_number = 0, const uint16_t i_grp_id = 0, const uint16_t i_manufacturer_code = 0xFFFF);
+
+	/**
+	 * @brief Send a Read Attributes command
+	 *
+	 * @param i_endpoint Destination endpoint
+	 * @param i_cluster_id Concerned cluster
+	 * @param i_attribute_ids Attribute ids to read
+	 * @param i_direction Message direction (client to server or server to client)
+	 * @param i_node_id Short address of destination
+	 * @param i_grp_id Multicast group address to use (0 is assume as unicast/broadcast)
+	 * @param i_manufacturer_code Manufacturer code
+	 */
+	bool ReadAttributes(const uint8_t i_endpoint, const uint16_t i_cluster_id, const std::vector<uint16_t> &i_attribute_ids,
+					   const EZCLFrameCtrlDirection i_direction, const uint16_t i_node_id,
+					   const uint8_t i_transaction_number = 0, const uint16_t i_grp_id = 0, const uint16_t i_manufacturer_code = 0xFFFF);
+
+	/**
+	 * @brief Send a WriteAttribute command
+	 *
+	 * @param i_endpoint Destination endpoint
+	 * @param i_cluster_id Concerned cluster
+	 * @param i_attribute_id Attribute to write
+	 * @param i_direction Message direction (client to server or server to client)
+	 * @param i_datatype Type of data to be written
+	 * @param i_data Data to write
+	 * @param i_node_id Short address of destination
+	 * @param i_grp_id Multicast group address to use (0 is assume as unicast/broadcast)
+	 * @param i_manufacturer_code Manufacturer code
+	 *
+	 * @return true if message can be send
+	 */
+	bool WriteAttribute(const uint8_t i_endpoint, const uint16_t i_cluster_id, const uint16_t i_attribute_id,
+						const EZCLFrameCtrlDirection i_direction, const uint8_t i_datatype, const NSSPI::ByteBuffer& i_data,
+						const uint16_t i_node_id, const uint8_t i_transaction_number = 0,
+						const uint16_t i_grp_id = 0, const uint16_t i_manufacturer_code = 0xFFFF);
+
+	/**
+	 * @brief Send a Configure Reporting command
+	 *
+	 * @param i_endpoint Destination endpoint
+	 * @param i_cluster_id Concerned cluster
+	 * @param i_attribute_id Attribute id
+	 * @param i_direction Message direction (client to server or server to client)
+	 * @param i_datatype Attribute type
+	 * @param i_min Minimum reporting interval
+	 * @param i_max Maximum reporting interval
+	 * @param i_reportable Reportable change
+	 * @param i_node_id Short address of destination
+	 * @param i_grp_id Multicast group address to use (0 is assume as unicast/broadcast)
+	 * @param i_manufacturer_code Manufacturer code
+	 */
+	bool ConfigureReporting(const uint8_t i_endpoint, const uint16_t i_cluster_id, const uint16_t i_attribute_id,
+							const EZCLFrameCtrlDirection i_direction, const uint8_t i_datatype, const uint16_t i_min,
+							const uint16_t i_max, const uint16_t i_reportable, const uint16_t i_node_id, 
+							const uint8_t i_transaction_number = 0, const uint16_t i_grp_id = 0, const uint16_t i_manufacturer_code = 0xFFFF);
+
 private:
 	void setState(CLibEzspInternal::State i_new_state);
 	CLibEzspInternal::State getState() const;
@@ -306,10 +514,11 @@ private:
 	 */
 	void handleDongleState( EDongleState i_state );
 	void handleEzspRxMessage( EEzspCmd i_cmd, NSSPI::ByteBuffer i_msg_receive );
+	void handleRxGpFrame( CGpFrame &i_gpf );
 	void handleBootloaderPrompt();
 	void handleFirmwareXModemXfr();
-	void handleRxGpFrame( CGpFrame &i_gpf );
 	void handleRxGpdId( uint32_t &i_gpd_id, bool i_gpd_known, CGpdKeyStatus i_gpd_key_status );
+	void handleRxGpFrameCommissioning( CGpFrame &i_gpf );
 
 	/**
 	 * @brief Handle an incoming VERSION EZSP message
@@ -350,6 +559,7 @@ private:
 	uint8_t exp_stack_type; /*!< Expected EZSP stack type from the EZSP adapter, 2=mesh */
 	uint16_t xncpManufacturerId;    /*!< The XNCP manufacturer ID read from the EZSP adatper (or 0 if unknown) */
 	uint16_t xncpVersionNumber;    /*!< The XNCP version number read from the EZSP adatper (or 0 if unknown) */
+	std::vector<uint8_t> dongleEUI64;    /*!< The dongle EUI64 MAC address */
 	CLibEzspInternal::State lib_state;    /*!< Current state for our internal state machine */
 	FLibStateCallback obsStateCallback;	/*!< Optional user callback invoked by us each time library state change */
 	CEzspDongle dongle; /*!< Dongle manipulation handler */
@@ -357,7 +567,17 @@ private:
 	CZigbeeNetworking zb_nwk;   /*!< Zigbee networking utility */
 	CGpSink gp_sink;    /*!< Internal Green Power sink utility */
 	FGpFrameRecvCallback obsGPFrameRecvCallback;   /*!< Optional user callback invoked by us each time a green power message is received */
+	FGpFrameCommissioningRecvCallback obsGPFrameCommissioningRecvCallback;  /*!< Optional user callback invoked by us each time a green power commissioning is received */
+	FZclFrameRecvCallback obsZclFrameRecvCallback;	 /*!< Optional user callback invoked by us each time a zcl frame is received */
+	FBindingTableRecvCallback obsBindingTableRecvCallback;  /*!< Optional user callback invoked by us each time a binding table is received */
+	FZdpDeviceAnnounceCallBack obsZdpDeviceAnnounceRecvCallback; /*!< Optional user callback invoked by us each time a new device join the network */
+	FZdpActiveEpCallBack obsZdpActiveEpRecvCallback; /*!< Optional user callback invoked by us each time a ZDP_ACTIVE_ENDPOINT is received */
+	FTrustCenterJoinHandlerCallBack obsTrustCenterJoinHandlerCallback; /*!< Optional user callback invoked by us each time a EZSP_TRUST_CENTER_JOIN_HANDLER is received */
+	FGpProxyTableEntryHandlerCallBack obsGpProxyTableEntryJoinHandlerCallback;  /*!< Optional user callback invoked by us each time a EZSP_GP_PROXY_TABLE_GET_ENTRY is received */
+	FZdpSimpleDescCallBack obsZdpSimpleDescRecvCallback; /*!< Optional user callback invoked by us each time a ZDP_SIMPLE_DESC is received */
+	FDongleEUI64CallBack obsDongleEUI64RecvCallback; /*!< Optional user callback invoked by us each time a EZSP_GET_EUI64 is received */
 	FGpSourceIdCallback obsGPSourceIdCallback;	/*!< Optional user callback invoked by us each time a green power message is received */
+	FNetworkParametersCallback obsNetworkParametersRecvCallback;  /*!< A user callback invoked by us each time an EZSP_GET_NETWORK_PARAMETERS is received */
 	FEnergyScanCallback energyScanCallback;  /*!< A user callback invoked by us each time an energy scan is finished */
 	FActiveScanCallback activeScanCallback;  /*!< A user callback invoked by us each time an active scan is finished */
 	FNetworkKeyCallback networkKeyCallback;	/*!< A user callback invoked by us when the network key details are retrieved */

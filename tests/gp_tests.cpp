@@ -77,15 +77,15 @@ public:
 	 */
 	int onWriteCallback(size_t& writtenCnt, const void* buf, size_t cnt, std::chrono::duration<double, std::milli> delta) {
 		NSSPI::ByteBuffer writtenBuffer(static_cast<const uint8_t*>(buf), cnt);
-		std::cout << "Host->emulated NCP write of " << std::dec << cnt << " bytes: " << NSSPI::Logger::byteSequenceToString(writtenBuffer);
+		//std::cout << "Host->emulated NCP write of " << std::dec << cnt << " bytes: " << NSSPI::Logger::byteSequenceToString(writtenBuffer);
 		if (delta != std::chrono::duration<double, std::milli>::max()) {
-			std::cout << ". Delta since last write: " << std::dec << (std::chrono::duration_cast<std::chrono::milliseconds>(delta)).count() << "ms";
+			//std::cout << ". Delta since last write: " << std::dec << (std::chrono::duration_cast<std::chrono::milliseconds>(delta)).count() << "ms";
 			if (this->nbWriteCalls == 0) {
-				std::cout << "\n";
+				//std::cout << "\n";
 				FAILF("First call to write() on mock serial interface should not lead to a valid delta\n");
 			}
 		}
-		std::cout << " (current stage " << std::dec << this->stage << ")\n";
+		//std::cout << " (current stage " << std::dec << this->stage << ")\n";
 		//std::cout << "which decoded as EZSP payload: " << NSSPI::Logger::byteSequenceToString(this->ash.appendIncoming(writtenBuffer)) << "\n";
 		writtenCnt = cnt;
 		bool transitionMatch = false;
@@ -93,11 +93,11 @@ public:
 			if (compareBufWithVector(buf, cnt, (*this->stageExpectedTransitions)[this->stage])) {
 				this->stage++;
 				transitionMatch = true;
-				std::cout << "Automatic trigger matched, transitionning to stage " << this->stage << "\n";
+				//std::cout << "Automatic trigger matched, transitionning to stage " << this->stage << "\n";
 			}
 		}
 		if (!transitionMatch) {
-			if (this->stage == 121 | this->stage == 122 || this->stage == 123) {	/* These stages are specific because there are parts of the buffer that come from randomness, thus cannot be strictly compared */
+			if (this->stage == 121 || this->stage == 122 || this->stage == 123) {	/* These stages are specific because there are parts of the buffer that come from randomness, thus cannot be strictly compared */
 				std::cout << "Specific exception for parsing stage 119 to 121\n";
 				//~ /* Slicing expected transition buffer to only the first 11 bytes */
 				//~ std::vector<uint8_t> expectedTransitionLeading11 = (*this->stageExpectedTransitions)[this->stage];
@@ -137,7 +137,7 @@ public:
 	 */
 	void onReadCallback(const unsigned char* dataIn, const size_t dataLen) {
 		NSSPI::ByteBuffer inputBuffer(dataIn, dataLen);
-		std::cerr << "Host<-emulated NCP notification of " << std::dec << dataLen << " bytes: " << NSSPI::Logger::byteSequenceToString(inputBuffer) << "\n";
+		//std::cerr << "Host<-emulated NCP notification of " << std::dec << dataLen << " bytes: " << NSSPI::Logger::byteSequenceToString(inputBuffer) << "\n";
 		this->nbReadCallbacks++;
 	}
 
@@ -203,7 +203,7 @@ TEST_GROUP(gp_tests) {
 		      )\
 		     ); \
 	else \
-		std::cout << "Passed stage " << tstage << " checkpoint (test running at line " << +__LINE__ << ")\n"; \
+		std::cout << "Passed stage " << std::dec << tstage << " checkpoint (test running at line " << +__LINE__ << ")\n"; \
 	} while(0) //NOSONAR
 
 

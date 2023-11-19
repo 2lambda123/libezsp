@@ -11,8 +11,11 @@
 
 #include "ezsp/lib-ezsp-main.h"
 #include "spi/ILogger.h"
+#include <ezsp/zbmessage/zcl-frame.h>
 #include "ezsp/ezsp-protocol/get-network-parameters-response.h"  // For CGetNetworkParametersResponse
 #include "ezsp/ezsp-protocol/struct/ember-key-struct.h"  // For CEmberKeyStruct
+#include "ezsp/ezsp-protocol/struct/ember-gp-proxy-table-entry-struct.h" // For CEmberGpProxyTableEntryStruct
+#include "ezsp/ezsp-protocol/struct/ember-gp-address-struct.h" // For CEmberGpAddressStruct
 
 DEFINE_ENUM(State, CLIBEZSP_INTERNAL_STATE_LIST, NSEZSP::CLibEzspInternal);
 
@@ -24,10 +27,11 @@ CLibEzspMain::CLibEzspMain(NSSPI::IUartDriverHandle uartHandle, const NSSPI::Tim
 	uartHandle(uartHandle),
 	timerbuilder(timerbuilder),
 	exp_ezsp_min_version(6),    /* Expect EZSP version 6 minimum */
-	exp_ezsp_max_version(8),    /* Expect EZSP version 8 maximum */
+	exp_ezsp_max_version(9),    /* Expect EZSP version 8 maximum */
 	exp_stack_type(2),  /* Expect a stack type=2 (mesh) */
 	xncpManufacturerId(0),  /* 0 means unknown (yet) */
 	xncpVersionNumber(0),  /* 0 means unknown (yet) */
+	dongleEUI64(),
 	lib_state(CLibEzspInternal::State::UNINITIALIZED),
 	obsStateCallback(nullptr),
 	dongle(timerbuilder, this),
@@ -35,7 +39,17 @@ CLibEzspMain::CLibEzspMain(NSSPI::IUartDriverHandle uartHandle, const NSSPI::Tim
 	zb_nwk(dongle, zb_messaging),
 	gp_sink(dongle, zb_messaging),
 	obsGPFrameRecvCallback(nullptr),
+	obsGPFrameCommissioningRecvCallback(nullptr),
 	obsGPSourceIdCallback(nullptr),
+	obsZclFrameRecvCallback(nullptr),
+	obsBindingTableRecvCallback(nullptr),
+	obsTrustCenterJoinHandlerCallback(nullptr),
+	obsGpProxyTableEntryJoinHandlerCallback(nullptr),
+	obsZdpDeviceAnnounceRecvCallback(nullptr),
+	obsNetworkParametersRecvCallback(nullptr),
+	obsZdpActiveEpRecvCallback(nullptr),
+	obsZdpSimpleDescRecvCallback(nullptr),
+	obsDongleEUI64RecvCallback(nullptr),
 	energyScanCallback(nullptr),
 	networkKeyCallback(nullptr),
 	leavePreviousNetworkAtInit(requestZbNetworkResetToChannel != 0),
@@ -83,12 +97,52 @@ void CLibEzspMain::registerLibraryStateCallback(FLibStateCallback newObsStateCal
 	this->obsStateCallback = newObsStateCallback;
 }
 
+void CLibEzspMain::registerZclFrameRecvCallback(FZclFrameRecvCallback newObsZclFrameRecvCallback) {
+	this->obsZclFrameRecvCallback = newObsZclFrameRecvCallback;
+}
+
+void CLibEzspMain::registerBindingTableRecvCallback(FBindingTableRecvCallback newObsBindingTableRecvCallback) {
+	this->obsBindingTableRecvCallback = newObsBindingTableRecvCallback;
+}
+
+void CLibEzspMain::registerTrustCenterJoinHandlerCallback(FTrustCenterJoinHandlerCallBack newObsTrustCenterJoinHandlerCallback) {
+	this->obsTrustCenterJoinHandlerCallback = newObsTrustCenterJoinHandlerCallback;
+}
+
+void CLibEzspMain::registerGpProxyTableEntryJoinHandlerCallback(FGpProxyTableEntryHandlerCallBack newObsGpProxyTableEntryJoinHandlerCallback) {
+	this->obsGpProxyTableEntryJoinHandlerCallback = newObsGpProxyTableEntryJoinHandlerCallback;
+}
+
+void CLibEzspMain::registerZdpDeviceAnnounceRecvCallback(FZdpDeviceAnnounceCallBack newObsZdpDeviceAnnounceRecvCallback) {
+	this->obsZdpDeviceAnnounceRecvCallback = newObsZdpDeviceAnnounceRecvCallback;
+}
+
+void CLibEzspMain::registerZdpActiveEpRecvCallback(FZdpActiveEpCallBack newObsZdpActiveEpRecvCallback) {
+	this->obsZdpActiveEpRecvCallback = newObsZdpActiveEpRecvCallback;
+}
+
+void CLibEzspMain::registerDongleEUI64RecvCallback(FDongleEUI64CallBack newObsDongleEUI64RecvCallback){
+	this->obsDongleEUI64RecvCallback = newObsDongleEUI64RecvCallback;
+}
+
+void CLibEzspMain::registerZdpSimpleDescRecvCallback(FZdpSimpleDescCallBack newObsZdpSimpleDescRecvCallback){
+	this->obsZdpSimpleDescRecvCallback = newObsZdpSimpleDescRecvCallback;
+}
+
 void CLibEzspMain::registerGPFrameRecvCallback(FGpFrameRecvCallback newObsGPFrameRecvCallback) {
 	this->obsGPFrameRecvCallback = newObsGPFrameRecvCallback;
 }
 
 void CLibEzspMain::registerGPSourceIdCallback(FGpSourceIdCallback newObsGPSourceIdCallback) {
 	this->obsGPSourceIdCallback = newObsGPSourceIdCallback;
+}
+
+void CLibEzspMain::registerGPFrameCommissioningRecvCallback(FGpFrameCommissioningRecvCallback newObsGPFrameCommissioningRecvCallback) {
+	this->obsGPFrameCommissioningRecvCallback = newObsGPFrameCommissioningRecvCallback;
+}
+
+void CLibEzspMain::registerNetworkParametersCallback(FNetworkParametersCallback newObsNetworkParametersCallback) {
+	this->obsNetworkParametersRecvCallback = newObsNetworkParametersCallback;
 }
 
 void CLibEzspMain::setState(CLibEzspInternal::State i_new_state) {
@@ -154,25 +208,25 @@ void CLibEzspMain::stackInit() {
 	std::vector<SEzspConfig> l_config;
 
 	l_config.push_back({.id = EZSP_CONFIG_NEIGHBOR_TABLE_SIZE,
-	                    .value = 32
+	                    .value = 16
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_APS_UNICAST_MESSAGE_COUNT,
 	                    .value = 10
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_BINDING_TABLE_SIZE,
-	                    .value = 0
+	                    .value = 20
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_ADDRESS_TABLE_SIZE,
-	                    .value = 64
+	                    .value = 16
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_MULTICAST_TABLE_SIZE,
-	                    .value = 8
+	                    .value = 16
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_ROUTE_TABLE_SIZE,
-	                    .value = 32
+	                    .value = 16
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_DISCOVERY_TABLE_SIZE,
-	                    .value = 16
+	                    .value = 8
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_STACK_PROFILE,
 	                    .value = 2
@@ -181,23 +235,23 @@ void CLibEzspMain::stackInit() {
 	                    .value = 5
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_MAX_HOPS,
-	                    .value = 15
+	                    .value = 30
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_MAX_END_DEVICE_CHILDREN,
 	                    .value = 32
 	                   }); // define number of sleepy end device directly attached to dongle
 	l_config.push_back({.id = EZSP_CONFIG_INDIRECT_TRANSMISSION_TIMEOUT,
-	                    .value = 3000
+	                    .value = 7680
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_END_DEVICE_POLL_TIMEOUT,
-	                    .value = 5
+	                    .value = 8
 	                   });
-	l_config.push_back({.id = EZSP_CONFIG_MOBILE_NODE_POLL_TIMEOUT,
+	/*l_config.push_back({.id = EZSP_CONFIG_MOBILE_NODE_POLL_TIMEOUT,
 	                    .value = 20
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_RESERVED_MOBILE_CHILD_ENTRIES,
 	                    .value = 0
-	                   });
+	                   });*/
 	l_config.push_back({.id = EZSP_CONFIG_TX_POWER_MODE,
 	                    .value = 0
 	                   });
@@ -205,16 +259,16 @@ void CLibEzspMain::stackInit() {
 	                    .value = 0
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_TRUST_CENTER_ADDRESS_CACHE_SIZE,
-	                    .value = 0
+	                    .value = 2
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_SOURCE_ROUTE_TABLE_SIZE,
-	                    .value = 0
+	                    .value = 8
 	                   });
-	l_config.push_back({.id = EZSP_CONFIG_END_DEVICE_POLL_TIMEOUT_SHIFT,
+	/*l_config.push_back({.id = EZSP_CONFIG_END_DEVICE_POLL_TIMEOUT_SHIFT,
 	                    .value = 6
-	                   });
+	                   });*/
 	l_config.push_back({.id = EZSP_CONFIG_FRAGMENT_WINDOW_SIZE,
-	                    .value = 0
+	                    .value = 1
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_FRAGMENT_DELAY_MS,
 	                    .value = 0
@@ -232,15 +286,16 @@ void CLibEzspMain::stackInit() {
 	                    .value = 60
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_PAN_ID_CONFLICT_REPORT_THRESHOLD,
-	                    .value = 1
+	                    .value = 2
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_REQUEST_KEY_TIMEOUT,
 	                    .value = 0
 	                   });
-	/*l_config.push_back({.id = EZSP_CONFIG_CERTIFICATE_TABLE_SIZE,
-	                    .value = 1});*/
+	// l_config.push_back({.id = EZSP_CONFIG_CERTIFICATE_TABLE_SIZE,
+	//                     .value = 0
+	//                    });
 	l_config.push_back({.id = EZSP_CONFIG_APPLICATION_ZDO_FLAGS,
-	                    .value =0
+	                    .value = 3
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_BROADCAST_TABLE_SIZE,
 	                    .value = 15
@@ -255,30 +310,31 @@ void CLibEzspMain::stackInit() {
 	                    .value = 0
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_ZLL_GROUP_ADDRESSES,
-	                    .value = 0
+	                    .value = 1
 	                   });
-	/*l_config.push_back({.id = EZSP_CONFIG_ZLL_RSSI_THRESHOLD,
-	                    .value = -128});*/
+	l_config.push_back({.id = EZSP_CONFIG_ZLL_RSSI_THRESHOLD,
+	                    .value = 128
+	                   });
 	l_config.push_back({.id = EZSP_CONFIG_MTORR_FLOW_CONTROL,
 	                    .value = 1
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_RETRY_QUEUE_SIZE,
-	                    .value = 8
+	                    .value = 16
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_NEW_BROADCAST_ENTRY_THRESHOLD,
-	                    .value = 10
+	                    .value = 9
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_TRANSIENT_KEY_TIMEOUT_S,
 	                    .value = 300
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_BROADCAST_MIN_ACKS_NEEDED,
-	                    .value = 1
+	                    .value = 255
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_TC_REJOINS_USING_WELL_KNOWN_KEY_TIMEOUT_S,
-	                    .value = 600
+	                    .value = 300
 	                   });
 	l_config.push_back({.id = EZSP_CONFIG_PACKET_BUFFER_COUNT,
-	                    .value = 0xFF
+	                    .value = 75
 	                   }); // use all remain memory for in/out radio packets
 
 	std::vector<SEzspPolicy> l_policy;
@@ -368,6 +424,24 @@ bool CLibEzspMain::addGPDevices(const std::vector<CGpDevice> &gpDevicesList) {
 		return false; /* Probably sink is not ready */
 	}
 
+	return true;
+}
+
+bool CLibEzspMain::getEUI64(){
+	if (this->getState() != CLibEzspInternal::State::READY) {
+		return false;
+	}
+	dongle.sendCommand(EZSP_GET_EUI64);
+	return true;
+}
+
+bool CLibEzspMain::getGPProxyTableEntry(const int index) {
+	if (this->getState() != CLibEzspInternal::State::READY) {
+		return false;
+	}
+	NSSPI::ByteBuffer payload;
+	payload.push_back(index);
+	dongle.sendCommand(EZSP_GP_PROXY_TABLE_GET_ENTRY, payload);
 	return true;
 }
 
@@ -485,6 +559,92 @@ bool CLibEzspMain::joinNetwork(NSEZSP::CEmberNetworkParameters& nwkParams) {
 		return false;
 	}
 	this->zb_nwk.joinNetwork(nwkParams);
+	return true;
+}
+
+bool CLibEzspMain::createNetwork(uint8_t channel){
+	if (this->getState() != CLibEzspInternal::State::READY || this->scanInProgress) {
+		return false;
+	}
+	this->resetDot154ChannelAtInit = channel;
+	this->zb_nwk.leaveNetwork();
+	return true;
+}
+
+bool CLibEzspMain::openNetwork(uint8_t i_timeout){
+	if (this->getState() != CLibEzspInternal::State::READY || this->scanInProgress) {
+		return false;
+	}
+	this->zb_nwk.openNetwork(i_timeout);
+	return true;
+}
+
+bool CLibEzspMain::closeNetwork(){
+	if (this->getState() != CLibEzspInternal::State::READY || this->scanInProgress) {
+		return false;
+	}
+	this->zb_nwk.closeNetwork();
+	return true;
+}
+
+bool CLibEzspMain::SendZDOCommand(EmberNodeId i_node_id, uint16_t i_cmd_id, const NSSPI::ByteBuffer& payload) {
+	if (this->getState() != CLibEzspInternal::State::READY || this->scanInProgress) {
+		return false;
+	}
+	this->zb_messaging.SendZDOCommand(i_node_id, i_cmd_id, payload);
+	return true;
+}
+
+bool CLibEzspMain::SendZCLCommand(const uint8_t i_endpoint, const uint16_t i_cluster_id, const uint8_t i_cmd_id,
+								  const NSEZSP::EZCLFrameCtrlDirection i_direction, const NSSPI::ByteBuffer& i_payload,
+								  const uint16_t i_node_id, const uint8_t i_transaction_number,
+								  const uint16_t i_grp_id, const uint16_t i_manufacturer_code) {
+	if (this->getState() != CLibEzspInternal::State::READY || this->scanInProgress) {
+		return false;
+	}
+	this->zb_messaging.SendZCLCommand(i_endpoint, i_cluster_id, i_cmd_id, i_direction, i_payload, i_node_id, i_transaction_number, i_grp_id, i_manufacturer_code);
+	return true;
+}
+
+bool CLibEzspMain::DiscoverAttributes(const uint8_t i_endpoint, const uint16_t i_cluster_id, const uint16_t i_start_attribute_identifier,
+									 const uint8_t i_maximum_attribute_identifier, const EZCLFrameCtrlDirection i_direction, const uint16_t i_node_id,
+									 const uint8_t i_transaction_number, const uint16_t i_grp_id, const uint16_t i_manufacturer_code){
+    if (this->getState() != CLibEzspInternal::State::READY || this->scanInProgress) {
+		return false;
+	}
+	this->zb_messaging.DiscoverAttributes(i_endpoint, i_cluster_id, i_start_attribute_identifier, i_maximum_attribute_identifier, i_direction, i_node_id, i_transaction_number, i_grp_id, i_manufacturer_code);
+	return true;
+}
+
+bool CLibEzspMain::ReadAttributes(const uint8_t i_endpoint, const uint16_t i_cluster_id, const std::vector<uint16_t> &i_attribute_ids,
+				   				 const EZCLFrameCtrlDirection i_direction, const uint16_t i_node_id,
+				   				 const uint8_t i_transaction_number, const uint16_t i_grp_id, const uint16_t i_manufacturer_code){
+	if (this->getState() != CLibEzspInternal::State::READY || this->scanInProgress) {
+		return false;
+	}
+	this->zb_messaging.ReadAttributes(i_endpoint, i_cluster_id, i_attribute_ids, i_direction, i_node_id, i_transaction_number, i_grp_id, i_manufacturer_code);
+	return true;
+}
+
+bool CLibEzspMain::WriteAttribute(const uint8_t i_endpoint, const uint16_t i_cluster_id, const uint16_t i_attribute_id,
+								  const EZCLFrameCtrlDirection i_direction, const uint8_t i_datatype, const NSSPI::ByteBuffer& i_data,
+								  const uint16_t i_node_id, const uint8_t i_transaction_number,
+								  const uint16_t i_grp_id, const uint16_t i_manufacturer_code) {
+	if (this->getState() != CLibEzspInternal::State::READY || this->scanInProgress) {
+		return false;
+	}
+	this->zb_messaging.WriteAttribute(i_endpoint, i_cluster_id, i_attribute_id, i_direction, i_datatype, i_data, i_node_id, i_transaction_number, i_grp_id, i_manufacturer_code);
+	return true;
+}
+
+bool CLibEzspMain::ConfigureReporting(const uint8_t i_endpoint, const uint16_t i_cluster_id, const uint16_t i_attribute_id,
+									  const EZCLFrameCtrlDirection i_direction, const uint8_t i_datatype, const uint16_t i_min,
+									  const uint16_t i_max, const uint16_t i_reportable, const uint16_t i_node_id,
+									  const uint8_t i_transaction_number, const uint16_t i_grp_id, const uint16_t i_manufacturer_code) {
+	if (this->getState() != CLibEzspInternal::State::READY || this->scanInProgress) {
+		return false;
+	}
+	this->zb_messaging.ConfigureReporting(i_endpoint, i_cluster_id, i_attribute_id, i_direction, i_datatype, i_min, i_max, i_reportable, i_node_id, i_transaction_number, i_grp_id, i_manufacturer_code);
 	return true;
 }
 
@@ -617,7 +777,7 @@ void CLibEzspMain::handleEzspRxMessage_NETWORK_STATE(const NSSPI::ByteBuffer& i_
 		}
 	}
 	else {
-		if ((this->getState() == CLibEzspInternal::State::STACK_INIT) && this->resetDot154ChannelAtInit) {
+		if ((this->getState() == CLibEzspInternal::State::STACK_INIT) && (this->resetDot154ChannelAtInit != 0)) {
 			clogI << "Zigbee reset requested... Leaving current network\n";
 			// leave current network
 			zb_nwk.leaveNetwork();
@@ -648,6 +808,9 @@ void CLibEzspMain::handleEzspRxMessage_STACK_STATUS_HANDLER(const NSSPI::ByteBuf
 		* Indeed, if the Zigbee network needs to be reset, we will first have to leave and re-create a network in the EZSP_NETWORK_STATE case below, and only then
 		* will we get called again with EMBER_NETWORK_UP once the Zigbee network has been re-created */
 		if ((EMBER_NETWORK_UP == status) && (this->resetDot154ChannelAtInit == 0)) {
+			/* Retrieve dongle's EUI64 MAC address */
+			dongle.sendCommand(EZSP_GET_EUI64);
+
 			this->setState(CLibEzspInternal::State::SINK_BUSY);
 			/* Create a sink state change callback to find out when the sink is ready */
 			/* When the sink becomes ready, then libezsp will also switch to ready state */
@@ -680,11 +843,11 @@ void CLibEzspMain::handleEzspRxMessage_STACK_STATUS_HANDLER(const NSSPI::ByteBuf
 }
 
 void CLibEzspMain::handleEzspRxMessage(EEzspCmd i_cmd, NSSPI::ByteBuffer i_msg_receive) {
-	//clogD << "CLibEzspMain::handleEzspRxMessage " << CEzspEnum::EEzspCmdToString(i_cmd);
-	//if (i_msg_receive.size()>0) {
-	//	clogD << " with payload " << i_msg_receive;
-	//}
-	//clogD << "\n";
+	clogD << "CLibEzspMain::handleEzspRxMessage " << CEzspEnum::EEzspCmdToString(i_cmd);
+	if (i_msg_receive.size()>0) {
+		clogD << " with payload " << i_msg_receive;
+	}
+	clogD << "\n";
 
 	switch( i_cmd ) {
 	case EZSP_STACK_STATUS_HANDLER: {
@@ -693,6 +856,11 @@ void CLibEzspMain::handleEzspRxMessage(EEzspCmd i_cmd, NSSPI::ByteBuffer i_msg_r
 	break;
 	case EZSP_GET_NETWORK_PARAMETERS: {
 		CGetNetworkParametersResponse l_rsp(i_msg_receive);
+
+		if( nullptr != obsNetworkParametersRecvCallback ) {
+			obsNetworkParametersRecvCallback(l_rsp);
+		}
+
 		clogI << l_rsp.String() << std::endl;
 	}
 	break;
@@ -707,16 +875,20 @@ void CLibEzspMain::handleEzspRxMessage(EEzspCmd i_cmd, NSSPI::ByteBuffer i_msg_r
 		}
 	}
 	break;
-	// case EZSP_GET_EUI64:
-	// {
-	//     // put eui64 on database for later use
-	//     db.dongleEui64.clear();
-	//     for( uint8_t loop=0; loop<EMBER_EUI64_BYTE_SIZE; loop++ )
-	//     {
-	//         db.dongleEui64.push_back(i_msg_receive.at(loop));
-	//     }
-	// }
-	// break;
+	case EZSP_GET_EUI64:
+	{
+
+		dongleEUI64.clear();
+
+		for( uint8_t loop=0; loop<EMBER_EUI64_BYTE_SIZE; loop++ ) {
+			dongleEUI64.push_back(i_msg_receive.at(loop));
+		}
+
+		if( nullptr != obsDongleEUI64RecvCallback ) {
+			obsDongleEUI64RecvCallback(dongleEUI64);
+		}
+	}
+	break;
 	case EEzspCmd::EZSP_VERSION: {
 		handleEzspRxMessage_VERSION(i_msg_receive);
 	}
@@ -737,19 +909,10 @@ void CLibEzspMain::handleEzspRxMessage(EEzspCmd i_cmd, NSSPI::ByteBuffer i_msg_r
 		this->setState(CLibEzspInternal::State::STACK_INIT);
 	}
 	break;
-	/*
-	case EZSP_INCOMING_MESSAGE_HANDLER:
-	{
-	    // the most important function where all zigbee incoming message arrive
-	    clogW << "Got an incoming Zigbee message (decoding not yet supported)\n";
-	}
-	break; */
-
 	case EZSP_LAUNCH_STANDALONE_BOOTLOADER: {
 		handleEzspRxMessage_EZSP_LAUNCH_STANDALONE_BOOTLOADER(i_msg_receive);
 	}
 	break;
-
 	case EZSP_START_SCAN: {
 		if (this->getState() != CLibEzspInternal::State::SCANNING) {
 			clogW << "Got a EZSP_START_SCAN message while not in SCANNING state\n";
@@ -763,7 +926,6 @@ void CLibEzspMain::handleEzspRxMessage(EEzspCmd i_cmd, NSSPI::ByteBuffer i_msg_r
 		}
 	}
 	break;
-
 	case EZSP_ENERGY_SCAN_RESULT_HANDLER: {
 		if (this->getState() != CLibEzspInternal::State::SCANNING) {
 			clogW << "Got a EZSP_ENERGY_SCAN_RESULT_HANDLER message while not in SCANNING state\n";
@@ -774,7 +936,6 @@ void CLibEzspMain::handleEzspRxMessage(EEzspCmd i_cmd, NSSPI::ByteBuffer i_msg_r
 		clogD << "EZSP_ENERGY_SCAN_RESULT_HANDLER: channel: " << std::dec << static_cast<unsigned int>(channel) << " rssi: " << static_cast<int>(rssi) << " dBm\n";
 	}
 	break;
-
 	case EZSP_NETWORK_FOUND_HANDLER: {
 		if (this->getState() != CLibEzspInternal::State::SCANNING) {
 			clogW << "Got a EZSP_NETWORK_FOUND_HANDLER message while not in SCANNING state\n";
@@ -790,7 +951,6 @@ void CLibEzspMain::handleEzspRxMessage(EEzspCmd i_cmd, NSSPI::ByteBuffer i_msg_r
 		clogW << "EZSP_NETWORK_FOUND_HANDLER: New network found: " << networkFound << "\n";
 	}
 	break;
-
 	case EZSP_SCAN_COMPLETE_HANDLER: {
 		if (this->getState() != CLibEzspInternal::State::SCANNING) {
 			clogW << "Got a EZSP_SCAN_COMPLETE_HANDLER message while not in SCANNING state\n";
@@ -822,11 +982,298 @@ void CLibEzspMain::handleEzspRxMessage(EEzspCmd i_cmd, NSSPI::ByteBuffer i_msg_r
 		}
 	}
 	break;
+	case EZSP_TRUST_CENTER_JOIN_HANDLER: {
+		clogI << "EZSP_TRUST_CENTER_JOIN_HANDLER" << " : " << i_msg_receive << "\n";
+		EmberNodeId sender = static_cast<EmberNodeId>(dble_u8_to_u16(i_msg_receive.at(1U), i_msg_receive.at(0U)));
+		uint8_t status = i_msg_receive.at(10U);
+		EmberEUI64 eui64;
+		for(uint8_t loop=0; loop < 8; loop++) {
+			eui64[loop] = i_msg_receive.at(2U+loop);
+		}
 
+		if( nullptr != obsTrustCenterJoinHandlerCallback ) {
+			obsTrustCenterJoinHandlerCallback(status, sender, eui64);
+		}
+
+	}
+	break;
+	case EZSP_GP_PROXY_TABLE_GET_ENTRY: {
+		clogI << "EZSP_GP_PROXY_TABLE_GET_ENTRY" << " : " << i_msg_receive << "\n";
+		
+		NSSPI::ByteBuffer l_msg_raw;
+		for(uint8_t loop = 0; loop < i_msg_receive.size()-1; loop++) {
+			l_msg_raw.push_back(i_msg_receive.at(1U+loop));
+		}
+		CEmberGpProxyTableEntryStruct CEmberGpProxyTableEntry(l_msg_raw);
+		CEmberGpAddressStruct CEmberGpAddress = CEmberGpProxyTableEntry.getGpdAddress();
+
+		clogD << CEmberGpProxyTableEntry.getGpdAddress() << std::endl;
+
+		if( nullptr != obsGpProxyTableEntryJoinHandlerCallback ) {
+			obsGpProxyTableEntryJoinHandlerCallback(CEmberGpProxyTableEntry.getGpProxyTableEntryStatus(), CEmberGpAddress.getSourceId(), CEmberGpAddress.getApplicationId(), CEmberGpAddress.getEndpoint());
+		}
+
+	}
+	break;
+	case EZSP_INCOMING_MESSAGE_HANDLER:
+	{
+		//using namespace NSEZSP;
+		// the most important function where all zigbee incomming message arrive
+		EmberIncomingMessageType type = static_cast<EmberIncomingMessageType>(i_msg_receive.at(0));
+		NSSPI::ByteBuffer l_aps_raw;
+		uint8_t CAPSFrameSize = CAPSFrame::getSize();
+		for(uint8_t loop = 0; loop < CAPSFrameSize; loop++) {
+			l_aps_raw.push_back(i_msg_receive.at(1U+loop));
+		}
+		uint8_t last_hop_lqi = i_msg_receive.at(1U+CAPSFrameSize);
+		uint8_t last_hop_rssi = i_msg_receive.at(2U+CAPSFrameSize);
+		EmberNodeId sender = static_cast<EmberNodeId>(dble_u8_to_u16(i_msg_receive.at(4U+CAPSFrameSize), i_msg_receive.at(3U+CAPSFrameSize)));
+		uint8_t binding_idx = i_msg_receive.at(5U+CAPSFrameSize);
+		uint8_t address_idx = i_msg_receive.at(6U+CAPSFrameSize);
+		uint8_t msg_length = i_msg_receive.at(7U+CAPSFrameSize);
+		NSSPI::ByteBuffer l_msg_raw;
+		for(uint8_t loop = 0; loop < msg_length; loop++) {
+			l_msg_raw.push_back(i_msg_receive.at(8U+CAPSFrameSize+loop));
+		}
+
+		clogI << "EZSP_INCOMING_MESSAGE_HANDLER type : " << CEzspEnum::EmberIncomingMessageTypeToString(type) <<
+			", last hop rssi : " << unsigned(last_hop_rssi) <<
+			", from : "<< std::hex << std::setw(4) << std::setfill('0') << unsigned(sender) << std::endl;
+
+		// Don't process some type of messages
+		if( !((EMBER_INCOMING_BROADCAST_LOOPBACK==type) || (EMBER_INCOMING_MULTICAST_LOOPBACK==type) || (EMBER_INCOMING_MANY_TO_ONE_ROUTE_REQUEST==type)) ) {
+			// Build a zigbee message to simplify process
+			CZigBeeMsg zbMsg;
+			zbMsg.Set(l_aps_raw,l_msg_raw);
+			//clogI << std::hex << std::setw(2) << std::setfill('0') << zbMsg.GetAps().GetEmberAPS();
+			if( 0 == zbMsg.GetAps().src_ep ) {
+				EZdpLowByte zdp_low = static_cast<EZdpLowByte>(u16_get_lo_u8(zbMsg.GetAps().cluster_id));
+
+				// ZDO (Zigbee Device Object)
+				if( ZDP_HIGHT_BYTE_RESPONSE == u16_get_hi_u8(zbMsg.GetAps().cluster_id)) {
+					switch(zdp_low) {
+						case ZDP_ACTIVE_EP: {
+							// byte 0 is for sequence number, ignore it!
+							uint8_t status = zbMsg.GetPayload().at(1U);
+							EmberNodeId address = static_cast<EmberNodeId>(dble_u8_to_u16(zbMsg.GetPayload().at(3U), zbMsg.GetPayload().at(2U)));
+							uint8_t ep_count = zbMsg.GetPayload().at(4U);
+
+							std::vector<uint8_t> ep_list;
+							for(uint8_t loop = 0; loop < ep_count; loop++) {
+								ep_list.push_back(zbMsg.GetPayload().at(5U+loop));
+							}
+
+							if( nullptr != obsZdpActiveEpRecvCallback ) {
+								obsZdpActiveEpRecvCallback(status, address, ep_count, ep_list);
+							}
+						}
+						break;
+						case ZDP_SIMPLE_DESC: {
+							// byte 0 is for sequence number, ignore it!
+							uint8_t status = zbMsg.GetPayload().at(1U);
+
+							if( 0 == status ) {
+								EmberNodeId address = static_cast<EmberNodeId>(dble_u8_to_u16(zbMsg.GetPayload().at(3U), zbMsg.GetPayload().at(2U)));
+								uint8_t lentgh = zbMsg.GetPayload().at(4U);
+								uint8_t endpoint = zbMsg.GetPayload().at(5U);
+								uint16_t profile_id = dble_u8_to_u16(zbMsg.GetPayload().at(7U), zbMsg.GetPayload().at(6U));
+								uint16_t device_id = dble_u8_to_u16(zbMsg.GetPayload().at(9U), zbMsg.GetPayload().at(8U));
+								uint8_t version = zbMsg.GetPayload().at(10U);
+								uint8_t in_count = zbMsg.GetPayload().at(11U);
+								uint8_t out_count = zbMsg.GetPayload().at(12U+(2U*in_count));
+
+								std::vector<uint16_t> in_list;
+								for(uint8_t loop = 0; loop < in_count; loop++) {
+									in_list.push_back(dble_u8_to_u16(zbMsg.GetPayload().at(13U+(2U*loop)), zbMsg.GetPayload().at(12U+(2U*loop))));
+								}
+
+								std::vector<uint16_t> out_list;
+								for(uint8_t loop=0; loop<out_count; loop++) {
+									out_list.push_back(dble_u8_to_u16(zbMsg.GetPayload().at(14U+(2U*in_count)+(2U*loop)), zbMsg.GetPayload().at(13U+(2U*in_count)+(2U*loop))));
+								}
+
+								// You need to do your own binding in your application with ZDO command, none will be done here.
+
+								if( nullptr != obsZdpActiveEpRecvCallback ) {
+									obsZdpSimpleDescRecvCallback(status, address, endpoint, profile_id, device_id, version, in_count, out_count, in_list, out_list);
+								}
+							}
+							else {
+								clogI << CZdpEnum::ToString(zdp_low) << " Response with status : " <<
+									std::hex << std::setw(2) << std::setfill('0') << unsigned(status) << std::endl;
+							}
+						}
+						case ZDP_NWK_ADDR: {
+							uint8_t status = zbMsg.GetPayload().at(1U);
+
+							if( 0 == status ) {
+								EmberNodeId address = static_cast<EmberNodeId>(dble_u8_to_u16(zbMsg.GetPayload().at(3U), zbMsg.GetPayload().at(2U)));
+								std::stringstream buf;
+								buf << CZdpEnum::ToString(zdp_low) << " Response : " <<
+									"[ status : " << std::hex << std::setw(2) << std::setfill('0') << unsigned(status) << "]" <<
+									"[ address : " << std::hex << std::setw(4) << std::setfill('0') << unsigned(address) << "]";
+								//clogI << buf.str() << std::endl;
+							}
+							else {
+								clogI << CZdpEnum::ToString(zdp_low) << " Response with status : " <<
+									std::hex << std::setw(2) << std::setfill('0') << unsigned(status) << std::endl;
+							}
+							break;
+						}
+						break;
+						case ZDP_BIND: {
+							uint8_t status = zbMsg.GetPayload().at(1U);
+							if( 0 == status ){
+								std::stringstream buf;
+								buf << CZdpEnum::ToString(zdp_low) << " Response : " <<
+									"[ status : " << std::hex << std::setw(2) << std::setfill('0') << unsigned(status) << "]";
+								clogI << buf.str() << std::endl;
+							}
+							else{
+								clogI << CZdpEnum::ToString(zdp_low) << " Response with status : " <<
+									std::hex << std::setw(2) << std::setfill('0') << unsigned(status) << std::endl;
+							}
+							break;
+						}
+						break;
+						case ZDP_MGMT_BIND: {
+							uint8_t status = zbMsg.GetPayload().at(1U);
+							if( 0 == status ){
+								std::stringstream buf;
+								buf << CZdpEnum::ToString(zdp_low) << " Response : " <<
+									"[ status : " << std::hex << std::setw(2) << std::setfill('0') << unsigned(status) << "]";
+								clogI << buf.str() << std::endl;
+
+								uint8_t bindingTableEntries = zbMsg.GetPayload().at(2U);
+								uint8_t startIndex = zbMsg.GetPayload().at(3U);
+								uint8_t bindingTableListCount = zbMsg.GetPayload().at(4U);
+								int jump = 5U;
+								NSEZSP::EmberEUI64 SrcAddr;
+								std::vector<NSEZSP::MgmtBindRsp> bindingTable;
+
+								if(bindingTableListCount != 0){
+									for(uint8_t loop = 0; loop<bindingTableListCount; loop++){
+										NSEZSP::MgmtBindRsp bindingEntry;
+										for(uint8_t i=0; i < 8; i++) {
+											SrcAddr[i] = zbMsg.GetPayload().at(jump+i);
+										}
+										bindingEntry.setSrcAddr(SrcAddr);
+										bindingEntry.setEndpoint(zbMsg.GetPayload().at(jump+8U));
+										bindingEntry.setCluster(dble_u8_to_u16(zbMsg.GetPayload().at(jump+10U), zbMsg.GetPayload().at(jump+9U)));
+										bindingEntry.setDstAddrMode(zbMsg.GetPayload().at(jump+11U));
+
+										if(bindingEntry.getDstAddrMode() == 0x03){
+											NSEZSP::EmberEUI64 DstAddr;
+											for(uint8_t i=0; i < 8; i++) {
+												DstAddr[i] = zbMsg.GetPayload().at(jump+12U+i);
+											}
+											bindingEntry.setDstAddrEUI64(DstAddr);
+											bindingEntry.setDstEndpoint(zbMsg.GetPayload().at(jump+20U));
+											jump += 21U;
+										}else{
+											bindingEntry.setDstAddrNodeId(static_cast<EmberNodeId>(dble_u8_to_u16(zbMsg.GetPayload().at(jump+13U), zbMsg.GetPayload().at(jump+12U))));
+											jump += 14U;
+										}
+										bindingTable.push_back(bindingEntry);	
+									}
+									
+								}
+
+								if( nullptr != obsBindingTableRecvCallback ) {
+									obsBindingTableRecvCallback(sender, bindingTableEntries, startIndex, bindingTableListCount, bindingTable);
+								}
+							}
+							else{
+								clogI << CZdpEnum::ToString(zdp_low) << " Response with status : " <<
+									std::hex << std::setw(2) << std::setfill('0') << unsigned(status) << std::endl;
+							}
+							break;
+						}
+						case ZDP_UNBIND: {
+							uint8_t status = zbMsg.GetPayload().at(1U);
+							if( 0 == status ){
+								std::stringstream buf;
+								buf << CZdpEnum::ToString(zdp_low) << " Response : " <<
+									"[ status : " << std::hex << std::setw(2) << std::setfill('0') << unsigned(status) << "]";
+								clogI << buf.str() << std::endl;
+							}
+							else{
+								clogI << CZdpEnum::ToString(zdp_low) << " Response with status : " <<
+									std::hex << std::setw(2) << std::setfill('0') << unsigned(status) << std::endl;
+							}
+							break;
+						}
+						break;
+						default: {
+							// DEBUG
+							clogI << "ZDO Response : " << CZdpEnum::ToString(zdp_low) << std::endl;
+							
+						}
+						break;
+					}
+				}
+				else {
+					if( ZDP_NODE_DESC == zdp_low) {
+						clogI << "ZDO Request : " << CZdpEnum::ToString(zdp_low) << std::endl;
+						
+						//clogI << zbMsg.GetPayload() << std::endl;
+						//EmberNodeId address = dble_u8_to_u16(zbMsg.GetPayload().at(1U), zbMsg.GetPayload().at(0U));
+
+						//clogI << unsigned(address) << std::endl;
+					}	
+					else if( ZDP_DEVICE_ANNOUNCE == zdp_low ) {
+						clogI << "ZDO Request : " << CZdpEnum::ToString(zdp_low) << std::endl;
+
+						/* Dirty! Store announcing device address as global variable to able to use this value in binding request for example
+						** Next step is to create Device, Enpoint, (Cluster ?) class to store all the dicovered info about product
+						*/
+						EmberEUI64 deviceEui64;
+						for(uint8_t loop=0; loop < 8; loop++) {
+							deviceEui64[loop] = zbMsg.GetPayload().at(3U+loop);
+						}
+
+						// We receive a device announce because a child join or rejoin network, start a discover endpoint process
+						// byte 0 is for sequence number, ignore it!
+						EmberNodeId address = dble_u8_to_u16(zbMsg.GetPayload().at(2U), zbMsg.GetPayload().at(1U));
+
+						if( nullptr != obsZdpDeviceAnnounceRecvCallback ) {
+							obsZdpDeviceAnnounceRecvCallback(address, deviceEui64);
+						}
+					}
+					else if (ZDP_NWK_ADDR == zdp_low) {
+						std::stringstream buf;
+						buf << CZdpEnum::ToString(zdp_low) << " Response : " <<
+							"[ address : " << std::hex << std::setw(4) << std::setfill('0') << unsigned(sender) << "]";
+						clogI << buf.str() << std::endl;
+					}
+					else {
+						// DEBUG
+						clogI << "ZDO Request : " << CZdpEnum::ToString(zdp_low) << std::endl;
+					}
+				}
+			}
+			else {
+				// Applicative zigbee message
+				NSSPI::ByteBuffer data;
+
+				uint8_t type = zbMsg.GetZCLHeader().GetFrmCtrl().convertEZCLFrameCtrlFrameTypeToInt8();
+				for(uint8_t loop = 0; loop < zbMsg.GetPayload().size(); loop++) {
+					data.push_back(zbMsg.GetPayload().at(loop));
+					//buf << std::hex << std::setw(2) << std::setfill('0') << unsigned(zbMsg.GetPayload().at(loop)) << ", ";
+				}
+				NSEZSP::CZclFrame zcl_frame(zbMsg.GetAps().src_ep, zbMsg.GetAps().cluster_id, type, zbMsg.GetZCLHeader().GetCmdId(), data);
+
+				if( nullptr != obsZclFrameRecvCallback ) {
+					obsZclFrameRecvCallback(sender, zcl_frame, last_hop_lqi);
+				}
+			}
+		}
+	}
+	break;
 	default: {
-		/* DEBUG VIEW
-		clogI << "Unhandled EZSP message " << CEzspEnum::EEzspCmdToString(i_cmd) << ": " << i_msg_receive << "\n";
-		*/
+		//DEBUG VIEW
+		//clogI << "Unhandled EZSP message " << CEzspEnum::EEzspCmdToString(i_cmd) << ": " << i_msg_receive << "\n";
+		
 	}
 	break;
 	}
@@ -838,7 +1285,7 @@ void CLibEzspMain::handleBootloaderPrompt() {
 
 void CLibEzspMain::handleRxGpFrame( CGpFrame &i_gpf ) {
 	// Start DEBUG
-	clogI << "CLibEzspMain::handleRxGpFrame gp frame : " << i_gpf << std::endl;
+	//clogI << "CLibEzspMain::handleRxGpFrame gp frame : " << i_gpf << std::endl;
 
 	if( nullptr != obsGPFrameRecvCallback ) {
 		obsGPFrameRecvCallback(i_gpf);
@@ -848,5 +1295,11 @@ void CLibEzspMain::handleRxGpFrame( CGpFrame &i_gpf ) {
 void CLibEzspMain::handleRxGpdId( uint32_t &i_gpd_id, bool i_gpd_known, CGpdKeyStatus i_gpd_key_status ) {
 	if( nullptr != obsGPSourceIdCallback ) {
 		obsGPSourceIdCallback(i_gpd_id, i_gpd_known, i_gpd_key_status);
+	}
+}
+
+void CLibEzspMain::handleRxGpFrameCommissioning( CGpFrame &i_gpf ) {
+	if( nullptr != obsGPFrameCommissioningRecvCallback ) {
+		obsGPFrameCommissioningRecvCallback(i_gpf);
 	}
 }
